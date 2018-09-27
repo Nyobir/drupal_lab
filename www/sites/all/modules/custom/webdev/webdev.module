@@ -1,0 +1,292 @@
+<?php
+
+/**
+ * Implements hook_block_info()
+ */
+function webdev_block_info() {
+  $blocks = array();
+
+  $blocks['webdev_currency_rates_block'] = array(
+    'info' => t('Currency rates'),
+  );
+  
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view()
+ */
+function webdev_block_view($delta='') {
+  $block = array();
+  
+  switch($delta) {
+    case 'webdev_currency_rates_block' :
+      $block['content'] = webdev_get_currency_rates_block_markup();
+      break;
+  }
+  
+  return $block;
+}
+
+/**
+ * Implements hook_menu()
+ */
+function webdev_menu() {
+  $items = array();
+
+  $items['admin/webdev'] = array(
+    'title' => 'Admin wevdev settings',
+    'page callback' => 'webdev_config_page_callback',
+    'access arguments' => array(
+      'admin webdev settings',
+    ),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+
+/**
+ * Implements hook_permissions()
+ */
+function webdev_permission() {
+  return array(
+    'admin webdev settings' => array(
+      'title' => t('Administer webdev module'),
+      'description' => t('Perform administration for webdev module.'),
+    ),
+  );
+}
+
+
+/**
+ * Config page callback
+ */
+function webdev_config_page_callback() {
+  $markup = '';
+
+  $form = drupal_get_form('webdev_currencies_config_form');
+  $rendered_form = drupal_render($form);
+
+  $markup = array(
+    '#type' => 'markup',
+    '#markup' => $rendered_form,
+  );
+
+  return $markup;
+}
+
+
+/**
+ * Implements currencies configuration form
+ */
+function webdev_currencies_config_form($form, &$form_state) {
+  $form = array();
+
+  $options = array();
+
+  $rates_data = webdev_get_currency_rates_data();
+  if (isset($rates_data->organizations)) {
+    foreach ($rates_data->organizations as $organization) {
+      if (isset($organization->title)) {
+        $options[$organization->title] = $organization->title;
+      }
+    }
+  }
+
+  $bank_name = variable_get('webdev_currency_default_bank', '');
+
+  $form['selected_bank'] = array(
+    '#type' => 'select',
+    '#title' => t('Bank'),
+    '#options' => $options,
+    '#default_value' => $bank_name,
+    '#description' => t('Select the one of available banks for Currency block'),
+  );
+  
+  $currency_list = array();
+  if (!empty($bank_name)) {
+    reset($rates_data->organizations);
+    foreach ($rates_data->organizations as $organization) {
+      if (isset($organization->title) && $organization->title == $bank_name) {
+        if (isset($organization->currencies)) {
+          foreach ($organization->currencies as $currency_name => $currency) {
+            $currency_list[] = $currency_name;
+          }
+        }
+      }
+    }
+  }
+
+  $currencies_options = drupal_map_assoc($currency_list);
+
+  $form['availaible_currencies'] = array(
+    '#type' => 'checkboxes',
+    '#options' => $currencies_options,
+    '#title' => t('Select at least one currency'),
+  );
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Save'));
+
+  return $form;
+}
+
+
+/**
+ * Implements currencies configuration form validation callback
+ */
+function webdev_currencies_config_form_validate($form, &$form_state) {
+
+}
+
+/**
+ * Implements currencies configuration form submit callback
+ */
+function webdev_currencies_config_form_submit($form, &$form_state) {
+  if (isset($form_state['values']['selected_bank'])) {
+    variable_set('webdev_currency_default_bank', $form_state['values']['selected_bank']);
+  }
+}
+
+
+
+/**
+ * Return markup for currency block
+ */
+function webdev_get_currency_rates_block_markup() {
+    $markup = array();
+  $bank_name = variable_get('webdev_currency_default_bank', '');
+  
+  if (!empty($bank_name)) {
+    $currency_bank_data = webdev_currency_rates_request($bank_name);
+
+    $markup = webdev_get_currency_rates_get_markup($currency_bank_data);
+  }
+
+
+  return $markup;
+}
+
+/**
+ * Get markup of currency rates
+ */
+function webdev_get_currency_rates_get_markup($currency_bank_data) {
+  $markup = '';
+
+  $bank_data = webdev_get_bank_data($currency_bank_data);
+  $usd = webdev_get_currency_rate_line_item($currency_bank_data, 'USD');
+  $eur = webdev_get_currency_rate_line_item($currency_bank_data, 'EUR');
+  $rub = webdev_get_currency_rate_line_item($currency_bank_data, 'RUB');
+  $header = '
+  	<div class="currency-rate-header">
+    <div class="currency-name">Currency</div>
+    <div class="currency-rate-ask">Ask</div>
+    <div class="currency-rate-bid">Bid</div>
+  	</div>';
+
+  $markup = '<div id="currency-rates-widget"><div class="currency-bank-data">' . $bank_data . '</div><div class="currency-rates">' . $header . $usd . $eur . $rub . '</div></div>';
+
+  return $markup;
+}
+
+/**
+ * Get info about bank
+ */
+function webdev_get_bank_data($currency_bank_data) {
+  $markup = '';
+  dsm($currency_bank_data);
+  $bank = $currency_bank_data->title;
+  $timestamp = time();
+  $current_time = date("d.m.Y H:i:s", $timestamp);
+
+  $markup = '
+  <div class="bank-data">
+  <div class="bank-name"><span>Bank: </span>' . $bank . '</div>
+  <div class="exchange-rate-time"><span>Rates time: </span>' . $current_time . '</div>
+  </div>';
+
+  return $markup;
+}
+
+/**
+ * Get currency rate line item
+ */
+function webdev_get_currency_rate_line_item($currency_bank_data, $currency) {
+  $line_item = '';
+
+  $item_rate_data = webdev_get_currency_rates($currency_bank_data, $currency);
+  if (isset($item_rate_data->ask) && isset($item_rate_data->bid)) {
+  	$ask = round($item_rate_data->ask, 2);
+  	$bid = round($item_rate_data->bid, 2);
+
+  	$line_item = '
+  	<div class="currency-rate-line-item">
+    <div class="currency-name">' . $currency . '</div>
+    <div class="currency-rate-ask">' . $ask . '</div>
+    <div class="currency-rate-bid">' . $bid . '</div>
+  	</div>';
+  }
+
+  return $line_item;
+}
+
+/**
+ * Process request to remote service to get currency rates data for selected bank
+ */
+function webdev_currency_rates_request($bank_name) {
+  $rates_data = webdev_get_currency_rates_data();
+  $currency_bank_data = webdev_get_currency_bank_data($rates_data, $bank_name);
+
+  return $currency_bank_data;
+}
+
+/**
+ * Get JSON for currency rates from http://resources.finance.ua/ua/public/currency-cash.json
+ */
+function webdev_get_currency_rates_data() {
+  $result = new stdClass();
+  
+  $url = 'http://resources.finance.ua/ua/public/currency-cash.json';
+  $options = array();
+  $request = drupal_http_request($url, $options);
+  
+  // checking for successfull code
+  if ($request->code == '200') {
+    $result = json_decode($request->data);
+  }
+  //dsm($result);
+  return $result;
+}
+
+/**
+ * Currency data from selected bank
+ */
+function webdev_get_currency_bank_data($rates_data, $bank_name) {
+  $data = new stdClass();
+
+  foreach ($rates_data->organizations as $item) {
+    if (isset($item->title) && $item->title == $bank_name) {
+      $data = $item;
+    }
+  }
+
+  return $data;
+}
+
+/**
+ * Get currency rates from rates data
+ */
+function webdev_get_currency_rates($rates_data, $currency) {
+  $rates = new stdClass();
+  
+  if (isset($rates_data->currencies)) {
+  	$currencies = (array) $rates_data->currencies;
+
+    if (isset($currencies[$currency])) {
+      $rates = $currencies[$currency];
+    }
+  }
+
+  return $rates;
+}

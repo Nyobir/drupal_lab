@@ -1,0 +1,3 @@
+name = WebDev sample module
+description = Implements WebDev sample module
+core = 7.x
